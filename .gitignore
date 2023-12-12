@@ -3,6 +3,7 @@
 Cargo.lock
 bin/
 wasm-pack.log
+package-lock.json
 **/node_modules
 **/.DS_Store
 .idea
