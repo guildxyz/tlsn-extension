@@ -1,13 +1,13 @@
-mod requests;
 mod requestOpt;
+mod requests;
 
-use std::panic;
 use std::ops::Range;
+use std::panic;
 use web_time::Instant;
 
-use hyper::{body::to_bytes, Body, Request, StatusCode};
-use futures::{AsyncWriteExt, TryFutureExt};
 use futures::channel::oneshot;
+use futures::{AsyncWriteExt, TryFutureExt};
+use hyper::{body::to_bytes, Body, Request, StatusCode};
 use tlsn_prover::tls::{Prover, ProverConfig};
 
 // use tokio::io::AsyncWriteExt as _;
@@ -17,28 +17,28 @@ use tokio_util::compat::FuturesAsyncWriteCompatExt;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
-use tracing_web::{MakeConsoleWriter, performance_layer};
 use tracing_subscriber::fmt::format::Pretty;
 use tracing_subscriber::fmt::time::UtcTime;
 use tracing_subscriber::prelude::*;
+use tracing_web::{performance_layer, MakeConsoleWriter};
 
-use ws_stream_wasm::{*};
+use ws_stream_wasm::*;
 
-use crate::requests::{NotarizationSessionRequest, NotarizationSessionResponse, ClientType};
 use crate::requestOpt::{RequestOptions, VerifyResult};
+use crate::requests::{ClientType, NotarizationSessionRequest, NotarizationSessionResponse};
 
 pub use wasm_bindgen_rayon::init_thread_pool;
 // use rayon::iter::IntoParallelRefIterator;
 use rayon::prelude::*;
 
-use wasm_bindgen_futures::JsFuture;
-use web_sys::{Request as WebsysRequest, RequestInit, Headers, RequestMode, Response};
-use js_sys::{JSON, Array};
+use js_sys::{Array, JSON};
 use url::Url;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{Headers, Request as WebsysRequest, RequestInit, RequestMode, Response};
 
-use tlsn_core::proof::{SessionProof, TlsProof};
-use std::time::Duration;
 use elliptic_curve::pkcs8::DecodePublicKey;
+use std::time::Duration;
+use tlsn_core::proof::{SessionProof, TlsProof};
 
 // A macro to provide `println!(..)`-style syntax for `console.log` logging.
 macro_rules! log {
@@ -134,8 +134,10 @@ pub async fn prover(
         notary_host
     );
     log!("Request: {}", url);
-    let rust_string = fetch_as_json_string(&url, &opts).await.unwrap();
-    let notarization_response = serde_json::from_str::<NotarizationSessionResponse>(&rust_string).unwrap();
+    let rust_string = fetch_as_json_string(&url, &opts)
+        .await?;
+    let notarization_response = serde_json::from_str::<NotarizationSessionResponse>(&rust_string)
+        .map_err(|e| JsValue::from(e.to_string()))?;
     log!("Response: {}", rust_string);
 
     log!("Notarization response: {:?}", notarization_response,);
@@ -145,21 +147,19 @@ pub async fn prover(
         notary_host,
         notarization_response.session_id
     );
-    let (mut notary_ws_meta, mut notary_ws_stream) = WsMeta::connect(
-        notary_wss_url,
-         None
-        ).await
-        .expect_throw( "assume the notary ws connection succeeds" );
+    let (mut notary_ws_meta, mut notary_ws_stream) = WsMeta::connect(notary_wss_url, None)
+        .await
+        .expect_throw("assume the notary ws connection succeeds");
     let mut notary_ws_stream_into = notary_ws_stream.into_io();
 
     /*
-        Connect Application Server with websocket proxy
-     */
+       Connect Application Server with websocket proxy
+    */
 
-    let (mut client_ws_meta, mut client_ws_stream) = WsMeta::connect(
-        options.websocket_proxy_url,
-        None ).await
-        .expect_throw( "assume the client ws connection succeeds" );
+    let (mut client_ws_meta, mut client_ws_stream) =
+        WsMeta::connect(options.websocket_proxy_url, None)
+            .await
+            .expect_throw("assume the client ws connection succeeds");
     let mut client_ws_stream_into = client_ws_stream.into_io();
 
     log!("!@# 0");
@@ -181,14 +181,12 @@ pub async fn prover(
         .await
         .unwrap();
 
-
     // Bind the Prover to the server connection.
     // The returned `mpc_tls_connection` is an MPC TLS connection to the Server: all data written
     // to/read from it will be encrypted/decrypted using MPC with the Notary.
     let (mpc_tls_connection, prover_fut) = prover.connect(client_ws_stream_into).await.unwrap();
 
     log!("!@# 3");
-
 
     // let prover_task = tokio::spawn(prover_fut);
     let (prover_sender, prover_receiver) = oneshot::channel();
@@ -197,7 +195,7 @@ pub async fn prover(
             Ok(prover_result) => {
                 // Send the prover
                 let _ = prover_sender.send(prover_result);
-            },
+            }
             Err(err) => {
                 panic!("An error occurred in prover_fut: {:?}", err);
             }
@@ -207,9 +205,10 @@ pub async fn prover(
     log!("!@# 7");
 
     // Attach the hyper HTTP client to the TLS connection
-    let (mut request_sender, connection) = hyper::client::conn::handshake(mpc_tls_connection.compat())
-        .await
-        .unwrap();
+    let (mut request_sender, connection) =
+        hyper::client::conn::handshake(mpc_tls_connection.compat())
+            .await
+            .unwrap();
     log!("!@# 8");
 
     // Spawn the HTTP task to be run concurrently
@@ -221,14 +220,18 @@ pub async fn prover(
             Ok(connection_result) => {
                 // Send the connection
                 let _ = connection_sender.send(connection_result);
-            },
+            }
             Err(err) => {
                 panic!("An error occurred in connection_task: {:?}", err);
             }
         }
     };
     spawn_local(handled_connection_fut);
-    log!("!@# 9 - {} request to {}", options.method.as_str(), targetUrl);
+    log!(
+        "!@# 9 - {} request to {}",
+        options.method.as_str(),
+        targetUrl
+    );
 
     let mut req_with_header = Request::builder()
         .uri(targetUrl)
@@ -248,14 +251,16 @@ pub async fn prover(
         log!("added body - {}", options.body.as_str());
         req_with_body = req_with_header.body(Body::from(options.body));
     }
-        
-    let unwrapped_request = req_with_body.unwrap();
 
+    let unwrapped_request = req_with_body.unwrap();
 
     log!("Starting an MPC TLS connection with the server");
 
     // Send the request to the Server and get a response via the MPC TLS connection
-    let response = request_sender.send_request(unwrapped_request).await.unwrap();
+    let response = request_sender
+        .send_request(unwrapped_request)
+        .await
+        .unwrap();
 
     log!("Got a response from the server");
 
@@ -285,7 +290,10 @@ pub async fn prover(
     log!("!@# 14");
 
     let secret_headers_vecs = string_list_to_bytes_vec(&secret_headers);
-    let secret_headers_slices: Vec<&[u8]> = secret_headers_vecs.iter().map(|vec| vec.as_slice()).collect();
+    let secret_headers_slices: Vec<&[u8]> = secret_headers_vecs
+        .iter()
+        .map(|vec| vec.as_slice())
+        .collect();
 
     // Identify the ranges in the transcript that contain revealed_headers
     let (sent_public_ranges, sent_private_ranges) = find_ranges(
@@ -294,7 +302,8 @@ pub async fn prover(
     );
 
     let secret_body_vecs = string_list_to_bytes_vec(&secret_body);
-    let secret_body_slices: Vec<&[u8]> = secret_body_vecs.iter().map(|vec| vec.as_slice()).collect();
+    let secret_body_slices: Vec<&[u8]> =
+        secret_body_vecs.iter().map(|vec| vec.as_slice()).collect();
 
     // Identify the ranges in the transcript that contain the only data we want to reveal later
     let (recv_public_ranges, recv_private_ranges) = find_ranges(
@@ -357,14 +366,10 @@ pub async fn prover(
     log!("!@# request takes: {} seconds", duration.as_secs());
 
     Ok(res)
-
 }
 
 #[wasm_bindgen]
-pub async fn verify(
-    proof: &str,
-    notary_pubkey_str: &str,
-) -> Result<String, JsValue> {
+pub async fn verify(proof: &str, notary_pubkey_str: &str) -> Result<String, JsValue> {
     log!("!@# proof {}", proof);
     let proof: TlsProof = serde_json::from_str(proof).unwrap();
 
@@ -377,12 +382,14 @@ pub async fn verify(
         substrings,
     } = proof;
 
-
-    log!("!@# notary_pubkey {}, {}", notary_pubkey_str, notary_pubkey_str.len());
+    log!(
+        "!@# notary_pubkey {}, {}",
+        notary_pubkey_str,
+        notary_pubkey_str.len()
+    );
     session
         .verify_with_default_cert_verifier(get_notary_pubkey(notary_pubkey_str))
         .unwrap();
-
 
     let SessionProof {
         // The session header that was signed by the Notary is a succinct commitment to the TLS transcript.
@@ -407,7 +414,8 @@ pub async fn verify(
     log!("-------------------------------------------------------------------");
     log!(
         "Successfully verified that the bytes below came from a session with {:?} at {}.",
-        server_name, time
+        server_name,
+        time
     );
     log!("Note that the bytes which the Prover chose not to disclose are shown as X.");
     log!("Bytes sent:");
@@ -423,7 +431,7 @@ pub async fn verify(
         recv: String::from_utf8(recv.data().to_vec()).unwrap(),
     };
     let res = serde_json::to_string_pretty(&result).unwrap();
-    
+
     Ok(res)
 }
 
